@@ -1,0 +1,519 @@
+---
+layout: post
+title:  "CFL3D源代码编译"
+date:   2017-08-10 08:07:25 +0800
+categories: CFL3D 编译 Linux
+---
+
+* 目录
+{:toc}
+
+# CFL3D源代码编译
+
+​	cfl3d是1980年代末用FORTRAN 77开发的，当时流行的系统是UNIX（Linux在1991年10月5日首次发布），跑CFD程序的主要平台是CRAY公司的超算和SGI的专业工作站这样的高大上设备。所以cfl3d在Linux下的编译显得很繁琐。再加上这次发布的开源cfl3d 6.7版本含有少量bug和兼容性问题，所以大家在初次编译时会存在很多困难。
+
+​	CFL3D在2017年7月10日开源之后，我们第一时间下载了代码并尝试进行了编译。我们选择的操作系统是大家常用的Ubuntu 16.04 LTS，并尽量选用apt-get自带的软件包，对比较老旧的RHEL 6.3也进行了初步测试，并尝试了常用的gfortran/openmpi开源组合与intel fortran/intel mpi组合。经过总结，下述方法应该对于常规Linux系统下的编译是有效的。
+
+## 常规方法
+
+### 安装必要软件 
+
+
+```shell
+sudo apt-get install libopenmpi-dev gfortran build-essential -y #核心工具
+sudo apt-get install git cmake tree vim -y # 辅助工具，建议安装
+```
+
+### 下载CFL3D官方代码
+
+```shell
+cd $HOME
+mkdir cfl3d
+cd cfl3d
+git clone https://github.com/nasa/CFL3D.git
+```
+
+CFL3D6.7源代码的文件结构如下
+
+```shell
+$ cd CFL3D
+$ tree
+.
+├── build #cfl3d采用out of source方式进行建构（build），源代码用软连接的方式映射到build文件夹中，防止源代码被修改。
+│   ├── cfl #常规的cfl3d在这里编译
+│   │   ├── libs #libcommon.a库
+│   │   ├── mpi #并行版本
+│   │   └── seq #串行版本
+│   ├── cflcmplx #复数版本的cfl3d，用于计算气动动导数
+│   │   ├── libs #同上
+│   │   ├── mpi
+│   │   └── seq
+│   ├── mag # maggie在此编译，用于overset网格的处理
+│   │   └── seq
+│   ├── precfl # precfl3d在此编译，用于在运行cfl3d前预估所需要的内存量
+│   │   └── seq
+│   ├── preron # preronnie在此编译，用于在运行ronnie前预估所需要的内存量
+│   │   └── seq
+│   ├── ron # ronnie在此编译，搭界网格预处理程序
+│   │   └── seq
+│   ├── split #splitter在此编译，网格分块工具
+│   │   └── seq
+│   ├── splitcmplx # 复数版本的splitcmplx
+│   │   └── seq
+│   └── tools #一些相关前后处理小工具
+│       └── seq
+├── header #这里面只有关于maggie的header: mag1.h，里面定义了maggie所能处理的问题的最大大小，修改之后需要重新编译。
+├── misc #tecplot方程脚本，用于从守恒量中计算出原始变量
+└── source #所有源代码放在这里
+    ├── cfl3d
+    │   ├── dist #主程序和libdist.a的源代码在这里
+    │   └── libs #libcommon.a源代码在这里，libcommon.a会被其他的如splitter/ronnie等工具调用。
+    ├── maggie
+    ├── precfl3d
+    ├── ronnie
+    ├── splitter
+    └── tools
+```
+
+在build文件夹中，有如下文件：
+
+```shell
+$ ll
+total 176
+drwxrwxr-x 11 ubuntu ubuntu  4096 Aug 10 00:34 ./
+drwxrwxr-x  7 ubuntu ubuntu  4096 Aug 10 00:34 ../
+drwxrwxr-x  5 ubuntu ubuntu  4096 Aug 10 00:34 cfl/
+drwxrwxr-x  5 ubuntu ubuntu  4096 Aug 10 00:34 cflcmplx/
+-rwxrwxr-x  1 ubuntu ubuntu 33656 Aug 10 00:34 Install* #生成makefile的脚本
+drwxrwxr-x  3 ubuntu ubuntu  4096 Aug 10 00:34 mag/
+-rwxrwxr-x  1 ubuntu ubuntu 29818 Aug 10 00:34 Makefile.in*
+-rw-rw-r--  1 ubuntu ubuntu 29815 Aug 10 00:34 makefile_intel_example # 两个针对特定编译器和平台示例。
+-rw-rw-r--  1 ubuntu ubuntu 29719 Aug 10 00:34 makefile_mac_gfortran_example
+drwxrwxr-x  3 ubuntu ubuntu  4096 Aug 10 00:34 precfl/
+drwxrwxr-x  3 ubuntu ubuntu  4096 Aug 10 00:34 preron/
+drwxrwxr-x  3 ubuntu ubuntu  4096 Aug 10 00:34 ron/
+drwxrwxr-x  3 ubuntu ubuntu  4096 Aug 10 00:34 split/
+drwxrwxr-x  3 ubuntu ubuntu  4096 Aug 10 00:34 splitcmplx/
+drwxrwxr-x  3 ubuntu ubuntu  4096 Aug 10 00:34 tools/
+```
+
+下面主要会用到Install脚本
+
+### 运行Install脚本生成makefile
+
+首先运行一下`./Install -h`命令，查看一下它有什么选项
+
+```shell
+~/cfl3d/CFL3D/build$ ./Install -h
+unknown argument for Install
+usage: Install  [options]
+       where [options] may be one or more of the following:
+       -single  create single precision executables
+       -no_opt  create executables with little optimization but fast compilation
+       -noredirect  disallow redirected input file; needed only for SP2 and sometimes on Linux with MPI
+       -purify  fortran memory checker: need 3rd party license for this
+       -fastio  fast I/O option when using MPI: creates cfl3d.out.reass file
+       -mpichdir=DIR  where DIR is the mpich base directory
+       -cgnsdir=DIR   where DIR is the cgns base directory
+       -linux_compiler_flags=(PG,Intel,Lahey,Alpha) for Linux
+       -help
+```
+
+这里的选项意义如下：
+
+- single  制作单精度版本的cfl3d，这个主要用于确认舍入误差对计算结果的影响，现在通常都不用了，但是单精度计算速度比双精度更快。
+- no_opt  不优化，相当于debug选项。
+- noredirect  禁用重定向输入文件功能，在SP2机器和Linux下用MPI并行时需要这个选项，选择它之后输入文件的名字就必须固定为`cfl3d.inp`
+- purify  调用第三方非免费的[purify程序](https://teamblue.unicomsi.com/products/purify/)进行内存检查（可以不用，也用不上）
+- fastio  当使用MPI并行的时候，启用fastio功能: 这会产生cfl3d.out.reass文件
+- mpichdir=DIR  MPI的库文件夹
+- cgnsdir=DIR   CGNS的库文件夹
+- linux_compiler_flags=(PG,Intel,Lahey,Alpha) 对于Linux环境，可以支持这些编译器，常用`Intel`, `PG`，如果是在神威系列超算，可以选择`Alpha`。Intel是默认选项。
+- help：输出帮助信息
+
+第一步可以用默认选项。
+
+```shell
+./Install
+```
+
+生成的主要文件是makefile文件。此时按理说就可以用`make`命令来生成相关的程序了。
+
+**但是**，除非做一些修改，不然编译会出错的。出错的地方主要有三类：
+
+- 依赖项问题
+- 源代码问题
+- 编译器设置问题
+
+### 依赖项问题
+
+#### 对CGNS的依赖
+
+​	如果用不上CGNS的功能，这一节可以忽略。
+
+​	[CGNS](https://cgns.github.io/)是CFD General Notation System的缩写，这是一种可移植的标准化CFD专用数据格式，也是AIAA推荐采用的CFD数据交换格式。CFL3D可以在编译的时候将其加入程序中，这样就可以读CGNS格式的网格，并写出CGNS格式结果文件。
+
+​	但是没有CGNS支持，CFL3D也是可以使用和编译的。所以简单起见可以选择不编译CGNS功能。因为这一块比较复杂。
+
+​	编译CGNS需要三个条件
+
+- 给编译器传入`-DCGNS`宏定义
+
+- 编译器能找到`cgnslib_f.h`接口文件
+
+- 编译器在链接时能找得到`libcgns.a`**静态链接库**
+
+
+​	Ubuntu/RHEL系统可以通过apt/yum安装系统默认的cgns库，但是都只包含了动态链接库，没有静态链接库，所以使用系统默认的cgns库会出现找不到hdf5.so的情况，这是因为比较新的默认cgns库会依赖于hdf5这个库，导致链接失败。
+
+​	虽然使用libcgns.so和hdf5.so进行编译不是不行（经过尝试，是可以编译运行的，但是没有太大意义），但为了简单起见，如果一定要使用cgns功能，建议采用一个较老版本的cgns库自行编译出静态库。
+
+​	下面进行介绍：
+
+```shell
+# 下载
+cd $HOME/cfl3d/CFL3D
+mkdir external
+cd external
+wget "http://jaist.dl.sourceforge.net/project/cgns/cgnslib_2.5/Release 5/cgnslib_2.5-5.tar.gz" -O cgnslib_2.5-5.tar.gz
+tar xf cgnslib_2.5-5.tar.gz
+mkdir cgns
+mkdir cgns/include
+mkdir cgns/lib
+cd cgnslib_2.5
+# 配置
+./configure --prefix=$HOME/cfl3d/CFL3D/external/cgns # 按照最简单的配置进行编译的，没有配hdf5，并行之类高级的功能。
+# 编译
+make #忽略中间产生的warning
+make install #安装到了$HOME/cfl3d/CFL3D/external/cgns中
+```
+
+​	此时，就会在生成相关的库文件。然后在运行Install脚本时，在cgnsdir选项处设置`./Install -cgnsdir=$HOME/cfl3d/CFL3D/external/cgns`即可。
+
+#### 对MPI的依赖
+
+​	对MPI的依赖比较复杂，直接设置`-mpichdir`是不行的，最好的方式是在Install脚本生成的makefile中直接修改fortran和c编译器，即设置变量`FTN=mpif90`和`CC=mpicc`。所幸Install已经这样做了。所以`-mpichdir`选项可以留空。
+
+#### precfl3d对libcommon.a的依赖
+
+​	在编译precfl3d时会提示如下错误：
+
+```shell
+pointers.o: In function `pointers_':
+pointers.F:(.text+0x10dc): undefined reference to `__module_kwstm_MOD_kws_get_nummem'
+pointers.F:(.text+0x1145): undefined reference to `__module_kwstm_MOD_kws_get_nummem'
+pointers.F:(.text+0x11a9): undefined reference to `__module_kwstm_MOD_kws_get_nummem'
+pointers.F:(.text+0x120d): undefined reference to `__module_kwstm_MOD_kws_get_nummem'
+collect2: error: ld returned 1 exit status
+```
+
+​	这是因为没有链接到libcommon.a，这时需要手动进入相关文件夹手动编译。
+
+```shell
+cd $HOME/cfl3d/CFL3D/build/precfl/seq
+ mpif90 -DP3D_SINGLE -DLINUX -DCGNS -DDBLE_PRECSN -I/home/ubuntu/cfl3d/cgns/include  -o precfl3d sizer.o get_cmd_args.o rpatch0.o outbuf.o getibk0.o global.o global2.o pointers.o compg2n.o umalloc.o cntsurf.o lead.o pre_patch.o pre_blockbc.o pre_embed.o pre_period.o usrint.o termn8.o getdhdr.o global0.o readkey.o parser.o ccomplex.o cgnstools.o setseg.o my_flush.o main.o  -L$(HOME)/cfl3d/cgns/lib -lcgns -L../../cfl/libs -lcommon
+```
+
+#### 复数版本对bc2010.F, u_doubleprime.F的依赖问题
+
+​	用一下命令手动指定链接到实数版本的`*.o`文件编译解决。
+
+```shell
+cd $HOME/cfl3d/CFL3D/build
+make splittercmplx cfl3dcmplx_seq #cfl3dcmplx_seq 会由于源代码列表不全，缺少bc2010.F,u_double_prime.F，无法编译，需要手动
+cd cflcmplx/seq
+mpif90 -DP3D_SINGLE -DLINUX  -DCGNS -DDBLE_PRECSN -I/home/cfd/cfl3d/CFL3D/external/cgns/include -DCMPLX -z muldefs -march=native -fbacktrace  -o cfl3dcmplx_seq ccomplex.o development.o main.o \
+libdist.a libcommon.a -L/home/cfd/cfl3d/CFL3D/external/cgns/lib -lcgns \
+../../cfl/libs/bc2010.o ../../cfl/libs/u_doubleprime.o #用实数版本的.o文件，能通过编译，但是可能运行时有问题。在CMake方法中解决
+cd -
+make cfl3dcmplx_mpi #会有同样的问题。手动编译解决
+cd cflcmplx/mpi
+mpif90 -DP3D_SINGLE -DDIST_MPI -DLINUX  -DCGNS -DDBLE_PRECSN -I/home/cfd/cfl3d/CFL3D/external/cgns/include -DCMPLX -z muldefs -march=native -fbacktrace  -o cfl3dcmplx_mpi ccomplex.o development.o main.o \
+libdist.a libcommon.a -L/home/cfd/cfl3d/CFL3D/external/cgns/lib -lcgns \
+../../cfl/libs/bc2010.o ../../cfl/libs/u_doubleprime.o #用实数版本的.o文件，能通过编译，但是可能运行时有问题。在CMake方法中解决
+cd -
+```
+
+### 源代码问题
+
+​	官方CFL3D的源代码在编译复数版本的时候会报错，因为在编译时有大量变量的类型从浮点数变成了复数，而复数变量是不能比较大小的，结果就导致了错误，解决方法是把变量加上`real()`，只用实数部分进行大小的比较。（这仅仅是使其能够通过编译，不能保证结果正确，但是从CFL3D代码来看，原作者其实也是这么干的。）
+
+​	修改示范：
+
+```fortran
+!cfl/libs/spalart.F:547:
+!if (i_saneg .eq. 1 .and. turre(j,k,i) .lt. 0.) then
+!修改为
+if (real(i_saneg) .eq. 1 .and. real(turre(j,k,i)) .lt. 0.) then
+```
+
+​	涉及到的源文件：`cfl/libs/barth3d.F, cfl/libs/foureqn.F, cfl/libs/spalart.F,cfl/libs/twoeqn.F,cfl/libs/bc2010.F`等。
+
+### 编译器问题
+
+​	Linux下其实常用的编译器是Intel Fortran和gfortran，主要针对这两者来说。
+
+​	Intall默认生成的是使用于intel fortran编译器的makefile文件，如果用gfortran编译会出错，错误主要在两点：
+
+ - 选项不匹配
+ - ETIME函数定义不同
+
+#### 选项不匹配
+
+​	用`./Install -cgnsdir=$HOME/cfl3d/cgns`生成的makefile中的编译选项部分如下：
+
+```shell
+...
+FFLAG        = -O2 -w -ip -fno-alias -xHost -traceback -module $(HOME)/cfl3d/CFL3D/build/$(CFLLIBSD)
+FFLAG_SPEC   = -O2 -w -ip -fno-alias -xHost -traceback -module $(HOME)/cfl3d/CFL3D/build/$(CFLLIBSD)
+PREC         = -r8
+PREC_MPI     = -DDBLE_PRECSN
+LFLAG        = -z muldefs -xHost -traceback -fpe0
+LLIBS        = -L$(HOME)/cfl3d/CFL3D/external/cgns/lib   -lcgns
+LLIBS_SEQ    = -L$(HOME)/cfl3d/CFL3D/external/cgns/lib  -lcgns
+MPI_INCDIR   =
+# CGNS_INCDIR这里是错误的，应该是-I$(HOME)/cfl3d/CFL3D/external/cgns/include
+CGNS_INCDIR  = -I$(HOME)/cfl3d/CFL3D/external/cgns
+CPP          = cpp
+CPPFLAG      = -P
+CPPOPT       =  $(MPI_INCDIR) -DDIST_MPI $(PREC_MPI)
+CPPOPT_SP    = -DP3D_SINGLE -DLINUX -DINTEL -DCGNS $(PREC_MPI) $(CGNS_INCDIR)
+CPPOPT_CMPLX = -DCMPLX
+FTN          = mpif90
+CC           = mpicc
+CFLAG        =
+AROPT        = rusc
+RANLIB       = true
+INLINE       =
+
+...
+```
+
+​	但是对于gfortran编译器而言。上述很多选项都因为不适用或者不识别而报错。所以我们做了以下选项对照表
+
+|       ifort        |       gfortran       |                    含义                    |
+| :----------------: | :------------------: | :--------------------------------------: |
+|        -O2         |         -O3          |     优化级别，gfortran -O3大概相当于ifort -O2      |
+|         -w         |          -w          |              关闭所有警告信息，不建议使用              |
+|        -ip         |       包含在-O3中        |            interprocedural优化             |
+|     -fno-alias     |       默认有这个设定        |     在程序范围内不进行重命名(alias)，防止一些非预料的结果输出     |
+|       -xHost       |    -march:native     |            针对本地cpu架构产生最优化的代码             |
+|     -traceback     |     -fbacktrace      |     编译时加入源代码信息，这样出错的时候可以看出来是哪段源代码的问题     |
+|       -fpe0        | -ffpe-trap=none，默认开启 | 在main函数中不启用float-point exception浮点数异常，也就是浮点运算出错、溢出、除以零之类的错误不引起异常（exceptions）而是产生一个NaN/Inf/0这样的值。 |
+| -module *DIR_PATH* |     -J*DIR_PATH*     |         查找fortran模块文件*.mod文件的文件夹         |
+|        -r8         |   -fdefault-real-8   |          程序中不指定浮点数宽度时默认使用双精度浮点数          |
+{:.mbtablestyle}
+
+​	根据上述表格，针对intel编译器的makefile需要修改为如下针对gfortran的makefile
+
+```shell
+FFLAG        = -O3 -fbacktrace -w -march=native -J../../$(CFLLIBSD)
+FFLAG_SPEC   = -O3 -fbacktrace -w -march=native -J../../$(CFLLIBSD)
+PREC         = -fdefault-real-8
+PREC_MPI     = -DDBLE_PRECSN
+LFLAG        =
+## 没有libcommon.a在编译precfl3d时会出现undefined reference 错误。
+LLIBS        = -L$(HOME)/cfl3d/CFL3D/external/cgns/lib -lcgns
+LLIBS_SEQ    = -L$(HOME)/cfl3d/CFL3D/external/cgns/lib -lcgns 
+MPI_INCDIR   =
+CGNS_INCDIR  = -I$(HOME)/cfl3d/CFL3D/external/cgns/include
+CPP          = cpp
+CPPFLAG      = -P
+CPPOPT       = -DFASTIO $(MPI_INCDIR) -DDIST_MPI $(PREC_MPI)
+CPPOPT_SP    = -DP3D_SINGLE -DLINUX -DCGNS $(PREC_MPI) $(CGNS_INCDIR)
+CPPOPT_CMPLX = -DCMPLX
+FTN          = mpif90
+CC           = mpicc
+CFLAG        =
+AROPT        = rusc
+RANLIB       = true
+INLINE       =
+```
+
+#### ETIME函数问题
+
+​	在编译maggie程序时，会提示一个ETIME函数错误，这是因为ifort和gfortran提供的ETIME函数接口不同，CFL3D使用的是ifort形式的，使用gfortran时不认识这个函数，通过修改以下代码增加兼容性可以解决这个问题。原理是利用`__GFORTRAN__`识别编译器为gfortran时，采用正确的调用形式。
+
+```fortran
+! source/maggie/cputim.F :109
+!#if defined ETFLAG
+!      call etime_(tm)
+!      call itime_(ia)
+!#else
+!      call etime(tm)
+!      call itime(ia)
+!#endif
+#if defined ETFLAG
+      call etime_(tm)
+      call itime_(ia)
+#elif defined __GFORTRAN__
+      call etime(tm(1:2),tm(3))
+      call itime(ia)
+#else
+      call etime(tm)
+      call itime(ia)
+#endif
+```
+
+### 修正版CFL3D
+
+​	为了进一步方便大家使用。笔者fork了原始的CFL3D官方代码，并修改了相关源代码和makefile的错误，按以下命令运行即可。
+
+```shell
+sudo apt-get install libopenmpi-dev gfortran build-essential git -y #核心工具
+git clone --depth=1 -b master --single-branch git://github.com/chengdi123000/CFL3D.git
+cd CFL3D/external/cgns
+./build_cgns
+cd ../../build
+./Install
+cp makefile_linux_gfortran_openmpi makefile
+```
+
+​	然后按下面总结部分的命令编译即可。
+
+### 总结
+
+​	经过上述修改，运行如下命令就可以用gfortran/ifort+openmpi/intel mpi编译cfl3d了。
+
+```shell
+cd $HOME/cfl3d/CFL3D/build
+make cfl3d_seq cfl3d_mpi splitter cfl3d_tools #有了这些大部分算例都可以运行了！
+make precfl3d #会出错，需要手动编译
+cd precfl/seq
+mpif90 -DP3D_SINGLE -DLINUX -DCGNS -DDBLE_PRECSN -I/home/ubuntu/cfl3d/cgns/include  -o precfl3d sizer.o get_cmd_args.o rpatch0.o outbuf.o getibk0.o global.o global2.o pointers.o compg2n.o umalloc.o cntsurf.o lead.o pre_patch.o pre_blockbc.o pre_embed.o pre_period.o usrint.o termn8.o getdhdr.o global0.o readkey.o parser.o ccomplex.o cgnstools.o setseg.o my_flush.o main.o  $HOME/cfl3d/CFL3D/external/cgns/lib/libcgns.a ../../cfl/libs/libcommon.a
+cd - #回到build文件夹
+make ronnie preronnie
+make maggie
+make splittercmplx cfl3dcmplx_seq #cfl3dcmplx_seq 会由于源代码列表不全，缺少bc2010.F,u_double_prime.F，无法编译，需要手动
+cd cflcmplx/seq
+mpif90 -DP3D_SINGLE -DLINUX  -DCGNS -DDBLE_PRECSN -I/home/cfd/cfl3d/CFL3D/external/cgns/include -DCMPLX -z muldefs -march=native -fbacktrace  -o cfl3dcmplx_seq ccomplex.o development.o main.o \
+libdist.a libcommon.a -L/home/cfd/cfl3d/CFL3D/external/cgns/lib -lcgns \
+../../cfl/libs/bc2010.o ../../cfl/libs/u_doubleprime.o #用实数版本的.o文件，能通过编译，但是可能运行时有问题。在CMake方法中解决
+cd -
+make cfl3dcmplx_mpi #会有同样的问题。手动编译解决
+cd cflcmplx/mpi
+mpif90 -DP3D_SINGLE -DDIST_MPI -DLINUX  -DCGNS -DDBLE_PRECSN -I/home/cfd/cfl3d/CFL3D/external/cgns/include -DCMPLX -z muldefs -march=native -fbacktrace  -o cfl3dcmplx_mpi ccomplex.o development.o main.o \
+libdist.a libcommon.a -L/home/cfd/cfl3d/CFL3D/external/cgns/lib -lcgns \
+../../cfl/libs/bc2010.o ../../cfl/libs/u_doubleprime.o #用实数版本的.o文件，能通过编译，但是可能运行时有问题。在CMake方法中解决
+cd -
+```
+
+​	但是生成的各个文件都在各自的文件夹下，不方便使用。所以利用如下命令建立一个bin文件夹，把相关程序都放进来。
+
+```shell
+cd $HOME/cfl3d/CFL3D
+mkdir bin
+cd bin
+## basic
+ln -s ../build/cfl/seq/cfl3d_seq
+## parallel version
+ln -s ../build/cfl/mpi/cfl3d_mpi
+## mesh block splitter
+ln -s ../build/split/seq/splitter
+## memory usage estimator
+ln -s ../build/precfl/seq/precfl3d
+## overset mesh related tool
+ln -s ../build/mag/seq/maggie
+## mesh deformation tool and its memory usage estimator
+ln -s ../build/ron/seq/ronnie
+ln -s ../build/preron/seq/preronnie
+## complex version of cfl3d which is used to compulate flight derivative
+ln -s ../build/cflcmplx/seq/cfl3dcmplx_seq
+ln -s ../build/cflcmplx/mpi/cfl3dcmplx_mpi
+ln -s ../build/splitcmplx/seq/splittercmplx
+## cfl3d_tools
+ln -s ../build/tools/seq/v6inpdoubhalf
+ln -s ../build/tools/seq/Get_FD
+ln -s ../build/tools/seq/initialize_field
+ln -s ../build/tools/seq/nmf_to_cfl3dinput
+ln -s ../build/tools/seq/cgns_to_cfl3dinput
+ln -s ../build/tools/seq/v6inpswitchijk
+ln -s ../build/tools/seq/v6_ronnie_mod
+ln -s ../build/tools/seq/moovmaker
+ln -s ../build/tools/seq/grid_perturb_cmplx
+ln -s ../build/tools/seq/v6_restart_mod
+ln -s ../build/tools/seq/gridswitchijk
+ln -s ../build/tools/seq/cfl3d_to_nmf
+ln -s ../build/tools/seq/cgns_readhist
+ln -s ../build/tools/seq/p3d_to_cfl3drst
+ln -s ../build/tools/seq/everyother_xyz
+ln -s ../build/tools/seq/p3d_to_INGRID
+ln -s ../build/tools/seq/v6_ronnie_mod.F90
+ln -s ../build/tools/seq/INGRID_to_p3d
+ln -s ../build/tools/seq/grid_perturb
+ln -s ../build/tools/seq/cfl3dinp_to_FVBND
+ln -s ../build/tools/seq/cfl3d_to_pegbc
+ln -s ../build/tools/seq/plot3dg_to_cgns
+ln -s ../build/tools/seq/XINTOUT_to_ovrlp
+```
+
+​	然后用如下命令加入PATH环境变量，就可以随时调用了。
+
+```shell
+export PATH="$HOME/cfl3d/CFL3D/bin:$PATH"
+```
+
+​	也可以在`$HOME/.bashrc`加入以下语句：
+
+```shell
+alias use_cfl3d="export PATH='\$HOME/cfl3d/CFL3D/bin:\$PATH'"
+```
+
+​	这样每次登陆时输入`use_cfl3d`就可以直接使用`cfl3d_seq, splitter`这些程序了。
+
+对于修正版CFL3D，上述命令都打包好了。
+
+```shell
+cd $HOME/cfl3d/CFL3D/bin
+./make_cfl3d_links
+source ./create_use_cfl3d
+use_cfl3d #enjoy!
+```
+
+即可。
+
+
+## CMake方法
+
+​	上述传统方法太麻烦了，主要是因为编译的依赖关系相对复杂，Install手动处理得不好。为了更好的使用和修改cfl3d，笔者用CMake重写了CFL3D的建构程序。用以下命令即可：
+
+```shell
+sudo apt-get install libopenmpi-dev gfortran build-essential cmake git -y #核心工具
+cd $HOME
+mkdir cfl3d
+cd cfl3d
+git clone --depth=1 -b CMake --single-branch git://github.com/chengdi123000/CFL3D.git #只下载最新的CMake分支
+# 编译CGNS库
+cd CFL3D/external/cgns
+./build_cgns
+cd ../../build
+# 用cmake生成Makefile
+cmake ../
+make -j`nproc`  #并行编译，有多少核用多少核，一个字，就是快！
+# Cmake版本没有关闭warning，所以有非常多的warning。
+```
+
+由于没有加入`-w`选项关闭warning，所以出现了大量警告信息。可以分为以下几类：
+
+- bessel.c用gfortran编译时不识别相关编译选项。
+- 把复数类型COMPLEX(8)赋值给实数类型REAL(8)
+- GOTO语句的不合理使用
+- 有名字的COMMON块尺寸不一致（数量最多）
+
+以上警告信息并不致命，但是也反映出cfl3d的代码有多老。
+
+完成后，所有可执行程序都在`build/bin`文件夹下了。运行以下代码即可使用
+
+```shell
+cd bin
+source ./create_use_cfl3d
+use_cfl3d
+# enjoy!
+```
+
+## 虚拟机
+
+​	为了**终极的方便**，笔者制作了CFL3D虚拟机，所有东西都安装编译完成，无痛体验CFL3D。
+
+​	获得方式：欢迎扫描页面下方的二维码，关注笔者的微信订阅号：[CFL3D研究](http://weixin.qq.com/r/cD9QSHnE9iSJrT0r92pi)，里面有虚拟机下载地址哦。
+
