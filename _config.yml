@@ -21,6 +21,7 @@ baseurl: "/" # the subpath of your site, e.g. /blog
 url: "http://cfl3d.cn" # the base hostname & protocol for your site, e.g. http://example.com
 github_username:  chengdi12300
 twitter_username:  CFL3D研究
+author: 程迪
 
 # Build settings
 markdown: kramdown
