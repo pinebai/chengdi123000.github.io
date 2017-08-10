@@ -1,0 +1,30 @@
+---
+layout: post
+title:  "公式图形测试"
+date:   2017-08-09 18:07:25 +0800
+categories: 公式 图形 测试
+---
+
+* 目录
+{:toc}
+# 公式
+
+连续性方程
+$$
+\frac{\partial \rho}{\partial t}+\vec v\cdot\frac{\partial \rho}{\partial x}=0
+$$
+
+# 图形
+
+```mermaid
+graph TD;
+    A-->B;
+    A-->C;
+    B-->D;
+    C-->D;
+```
+
+# 贴图
+
+![!img](/assets/qrcode.jpg)
+
