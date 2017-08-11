@@ -9,10 +9,14 @@ categories: 公式 图形 测试
 {:toc}
 # 公式
 
-连续性方程
+关于$\rho$的连续性方程
+
+
 $$
 \frac{\partial \rho}{\partial t}+\vec v\cdot\frac{\partial \rho}{\partial x}=0
 $$
+
+
 
 # 图形
 
