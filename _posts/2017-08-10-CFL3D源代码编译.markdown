@@ -482,7 +482,7 @@ sudo apt-get install libopenmpi-dev gfortran build-essential cmake git -y #核�
 cd $HOME
 mkdir cfl3d
 cd cfl3d
-git clone --depth=1 -b master --single-branch git://github.com/chengdi123000/CFL3D.git #只下载最新的CMake分支
+git clone --depth=1 -b master --single-branch git://github.com/chengdi123000/CFL3D.git #只下载最新的CMake分支，现在CMake分支已经合并到master了。
 # 编译CGNS库
 cd CFL3D/external/cgns
 ./build_cgns
